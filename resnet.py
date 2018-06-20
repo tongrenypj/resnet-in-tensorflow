@@ -8,6 +8,7 @@ import numpy as np
 from hyper_parameters import *
 
 
+# ϵ或ε 批归一化参数
 BN_EPSILON = 0.001
 
 def activation_summary(x):
@@ -29,7 +30,7 @@ def create_variables(name, shape, initializer=tf.contrib.layers.xavier_initializ
     layers.
     :return: The created variable
     '''
-    
+    # 权重正则化，防止过拟合
     ## TODO: to allow different weight decay to fully connected layer and conv layer
     regularizer = tf.contrib.layers.l2_regularizer(scale=FLAGS.weight_decay)
 
@@ -44,6 +45,7 @@ def output_layer(input_layer, num_labels):
     :param num_labels: int. How many output labels in total? (10 for cifar10 and 100 for cifar100)
     :return: output layer Y = WX + B
     '''
+    #  [128,64][-1] = 64
     input_dim = input_layer.get_shape().as_list()[-1]
     fc_w = create_variables(name='fc_weights', shape=[input_dim, num_labels], is_fc_layer=True,
                             initializer=tf.uniform_unit_scaling_initializer(factor=1.0))
@@ -60,6 +62,9 @@ def batch_normalization_layer(input_layer, dimension):
     :param dimension: input_layer.get_shape().as_list()[-1]. The depth of the 4D tensor
     :return: the 4D tensor after being normalized
     '''
+
+    # 批归一化
+    # bn_layer = batch_normalization_layer(conv_layer, out_channel)
     mean, variance = tf.nn.moments(input_layer, axes=[0, 1, 2])
     beta = tf.get_variable('beta', dimension, tf.float32,
                                initializer=tf.constant_initializer(0.0, tf.float32))
@@ -79,6 +84,8 @@ def conv_bn_relu_layer(input_layer, filter_shape, stride):
     :return: 4D tensor. Y = Relu(batch_normalize(conv(X)))
     '''
 
+    # conv0 = conv_bn_relu_layer(input_tensor_batch, [3, 3, 3, 16], 1)
+    # 第一个卷积层，包括卷积，批归一化，relu激活
     out_channel = filter_shape[-1]
     filter = create_variables(name='conv', shape=filter_shape)
 
@@ -98,6 +105,7 @@ def bn_relu_conv_layer(input_layer, filter_shape, stride):
     :return: 4D tensor. Y = conv(Relu(batch_normalize(X)))
     '''
 
+    # 残差卷积过程
     in_channel = input_layer.get_shape().as_list()[-1]
 
     bn_layer = batch_normalization_layer(input_layer, in_channel)
@@ -135,13 +143,17 @@ def residual_block(input_layer, output_channel, first_block=False):
             filter = create_variables(name='conv', shape=[3, 3, input_channel, output_channel])
             conv1 = tf.nn.conv2d(input_layer, filter=filter, strides=[1, 1, 1, 1], padding='SAME')
         else:
+            # 如果x输入输出深度不同，则步长加倍，宽高尺寸减半，深度加倍
             conv1 = bn_relu_conv_layer(input_layer, [3, 3, input_channel, output_channel], stride)
 
     with tf.variable_scope('conv2_in_block'):
+        # 尺寸不变，深度不变
         conv2 = bn_relu_conv_layer(conv1, [3, 3, output_channel, output_channel], 1)
 
     # When the channels of input layer and conv2 does not match, we add zero pads to increase the
     #  depth of input layers
+
+    # x池化宽高尺寸减半，并深度加倍，以便x与conv2维度相同，可以相加
     if increase_dim is True:
         pooled_input = tf.nn.avg_pool(input_layer, ksize=[1, 2, 2, 1],
                                       strides=[1, 2, 2, 1], padding='VALID')
@@ -150,11 +162,14 @@ def residual_block(input_layer, output_channel, first_block=False):
     else:
         padded_input = input_layer
 
+    # 实现x-->bn_relu_conv1-->bn_relu_conv2-->bn_relu 跳远连接，使之从x-->bn_relu
     output = conv2 + padded_input
     return output
 
 
 def inference(input_tensor_batch, n, reuse):
+    # 32*32*16->32*32*16->16*16*32->8*8*64->8*8
+    # total layers = 1 + 2n + 2n + 2n +1 = 6n + 2
     '''
     The main function that defines the ResNet. total layers = 1 + 2n + 2n + 2n +1 = 6n + 2
     :param input_tensor_batch: 4D tensor
@@ -164,11 +179,15 @@ def inference(input_tensor_batch, n, reuse):
     :return: last layer in the network. Not softmax-ed
     '''
 
+    # 一个普通卷积层，3部分残差结构，每个结构内map出的图像（卷积图）尺寸不变，深度不变。一个结构中有n个残差块
+    # 每个残差块两个卷积，n = 5时 每个结构有5个残差块，10个卷积层。3个结构总共有15个残差块，30个卷积层，最后接一个普通全连接输出层
+    # 总共32层
     layers = []
     with tf.variable_scope('conv0', reuse=reuse):
         conv0 = conv_bn_relu_layer(input_tensor_batch, [3, 3, 3, 16], 1)
         activation_summary(conv0)
         layers.append(conv0)
+
 
     for i in range(n):
         with tf.variable_scope('conv1_%d' %i, reuse=reuse):
@@ -197,6 +216,8 @@ def inference(input_tensor_batch, n, reuse):
         relu_layer = tf.nn.relu(bn_layer)
         global_pool = tf.reduce_mean(relu_layer, [1, 2])
 
+        # global_pool.get_shape() tensorShape(128,64)  global_pool.get_shape().as_list() ---[128,64]
+        # [128,64].[-1:] = [64]切片操作取最后一个数作为新数组 例如[2,34,7,8,9,1000][-1:]=[1000]
         assert global_pool.get_shape().as_list()[-1:] == [64]
         output = output_layer(global_pool, 10)
         layers.append(output)

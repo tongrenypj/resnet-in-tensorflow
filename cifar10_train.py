@@ -7,7 +7,7 @@ from datetime import datetime
 import time
 from cifar10_input import *
 import pandas as pd
-
+import triplet_loss
 
 
 class Train(object):
@@ -57,7 +57,13 @@ class Train(object):
         # The following codes calculate the train loss, which is consist of the
         # softmax cross entropy and the relularization loss
         regu_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-        loss = self.loss(logits, self.label_placeholder)
+
+
+        # loss = self.loss(logits, self.label_placeholder)
+
+        loss, fraction_positive_triplets = self.batch_all_triplet_loss(logits, self.label_placeholder)
+
+        # [0.01]
         self.full_loss = tf.add_n([loss] + regu_losses)
 
         predictions = tf.nn.softmax(logits)
@@ -65,7 +71,11 @@ class Train(object):
 
 
         # Validation loss
-        self.vali_loss = self.loss(vali_logits, self.vali_label_placeholder)
+        # self.vali_loss = self.loss(vali_logits, self.vali_label_placeholder)
+
+        self.vali_loss ,fraction_positive_triplets = self.batch_all_triplet_loss(vali_logits, self.vali_label_placeholder)
+
+
         vali_predictions = tf.nn.softmax(vali_logits)
         self.vali_top1_error = self.top_k_error(vali_predictions, self.vali_label_placeholder, 1)
 
@@ -82,7 +92,11 @@ class Train(object):
 
         # For the first step, we are loading all training images and validation images into the
         # memory
+        # (50000,36,36,3),float32
+        # (50000,),float64
         all_data, all_labels = prepare_train_data(padding_size=FLAGS.padding_size)
+        # (10000, 32, 32, 3),float32
+        # (10000,),float64
         vali_data, vali_labels = read_validation_data()
 
         # Build the graph for train and validation
@@ -115,6 +129,9 @@ class Train(object):
         print('Start training...')
         print('----------------------------')
 
+
+
+        # 'train_steps', 80000, '''Total steps that you want to train'
         for step in range(FLAGS.train_steps):
 
             train_batch_data, train_batch_labels = self.generate_augment_train_batch(all_data, all_labels,
@@ -126,6 +143,7 @@ class Train(object):
 
             # Want to validate once before training. You may check the theoretical validation
             # loss first
+            # 'report_freq', 391, '''Steps takes to output errors on the screen and write summaries
             if step % FLAGS.report_freq == 0:
 
                 if FLAGS.is_full_validation is True:
@@ -279,6 +297,17 @@ class Train(object):
         return cross_entropy_mean
 
 
+    def batch_all_triplet_loss(self,embeddings,labels,  margin = 0.5, squared=False):
+
+        return triplet_loss.batch_all_triplet_loss(labels, embeddings, margin, squared=squared)
+
+    def batch_hard_triplet_loss(self,embeddings,labels,  margin, squared=False):
+
+        return triplet_loss.batch_hard_triplet_loss(labels, embeddings, margin = 0.5, squared=squared)
+
+
+
+
     def top_k_error(self, predictions, labels, k):
         '''
         Calculate the top-k error
@@ -416,6 +445,10 @@ class Train(object):
 
         return np.mean(loss_list), np.mean(error_list)
 
+
+# 发现复杂了可能效果还不好，所以就做了一个简单的模型，原始为32*32的图，padding了4位，然后再随机crop出32*32的图，
+# 接着便三个卷积层结构，分别为32*32×16，16*16×32，8*8×64，每层n个block，每个block俩个卷积层，再加上最后fc共6n+2层。
+# 说是110层效果最好，1000+层反而还不好了，可能是过拟合。
 
 maybe_download_and_extract()
 # Initialize the Train object
